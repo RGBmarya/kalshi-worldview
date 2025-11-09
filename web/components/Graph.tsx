@@ -36,19 +36,53 @@ export default function Graph({
   }, [suggestions]);
 
   const nodes: Node[] = useMemo(() => {
+    // Lay out nodes in non-overlapping rows grouped by hop.
+    const H_GAP = 40; // horizontal gap between nodes
+    const V_GAP = 200; // vertical gap between rows
+    const MARGIN_X = 40;
+    const MARGIN_Y = 40;
+
+    // Collect distinct hops in ascending order
+    const hops = Array.from(new Set(graph.nodes.map((n) => n.hop))).sort(
+      (a, b) => a - b
+    );
+
+    // Compute a deterministic position per node id
+    const positions = new Map<
+      string,
+      { x: number; y: number; width: number }
+    >();
+
+    let currentY = MARGIN_Y;
+    for (const hop of hops) {
+      const group = graph.nodes
+        .filter((n) => n.hop === hop)
+        .sort((a, b) => b.similarity - a.similarity);
+
+      let currentX = MARGIN_X + hop * 10; // slight offset per hop for visual variety
+      for (const node of group) {
+        const size = 20 + Math.round(20 * node.similarity);
+        const width = size * 5;
+        positions.set(node.id, { x: currentX, y: currentY, width });
+        currentX += width + H_GAP;
+      }
+      currentY += V_GAP;
+    }
+
     return graph.nodes.map((n) => {
       const size = 20 + Math.round(20 * n.similarity);
+      const pos = positions.get(n.id) ?? { x: 0, y: 0, width: size * 5 };
       return {
         id: n.id,
         data: { label: n.label },
-        position: { x: Math.random() * 600, y: Math.random() * 400 },
+        position: { x: pos.x, y: pos.y },
         style: {
           backgroundColor: hopColor(n.hop),
           color: "white",
           borderRadius: 6,
           border: "1px solid rgba(0,0,0,0.1)",
           padding: 8,
-          width: size * 5,
+          width: pos.width,
         },
       };
     });
