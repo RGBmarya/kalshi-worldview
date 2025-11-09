@@ -9,5 +9,7 @@ body,
 }
 
 body {
-  @apply bg-gray-50 text-gray-900;
+  /* Bone white background and near-black text */
+  background-color: #f7f3ea;
+  color: #0b0b0b;
 }
