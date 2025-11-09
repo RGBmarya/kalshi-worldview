@@ -17,8 +17,9 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [graph, setGraph] = useState<GraphResponse["graph"] | null>(null);
-  const [suggestions, setSuggestions] =
-    useState<GraphResponse["suggestions"]>([]);
+  const [suggestions, setSuggestions] = useState<GraphResponse["suggestions"]>(
+    []
+  );
   const [eventCounts, setEventCounts] = useState<Record<string, number>>({});
   const [isExpanding, setIsExpanding] = useState(false);
 
@@ -69,7 +70,8 @@ export default function Page() {
             let dataLine = "";
             for (const line of raw.split("\n")) {
               if (line.startsWith("event: ")) eventType = line.slice(7).trim();
-              else if (line.startsWith("data: ")) dataLine += line.slice(6).trim();
+              else if (line.startsWith("data: "))
+                dataLine += line.slice(6).trim();
             }
 
             if (eventType) {
@@ -240,8 +242,8 @@ export default function Page() {
           <div className="w-full max-w-xl rounded-2xl border border-black/10 bg-white/70 backdrop-blur shadow-lg p-6">
             <h1 className="text-2xl mb-2">Enter your worldview</h1>
             <p className="text-sm text-black/70 mb-4">
-              Describe a belief about how the world may unfold. We&apos;ll
-              build a graph and link relevant Kalshi markets.
+              Describe a belief about how the world may unfold. We&apos;ll build
+              a graph and link relevant Kalshi markets.
             </p>
             <form onSubmit={onSubmit} className="flex flex-col gap-3">
               <input

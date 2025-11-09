@@ -1,8 +1,14 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { ReactFlow, Background, Controls, Panel } from "@xyflow/react";
-import type { Edge, Node } from "@xyflow/react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  Panel,
+  applyNodeChanges,
+} from "@xyflow/react";
+import type { Edge, Node, NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { GraphResponse, Suggestion } from "../lib/types";
 import SidePanel from "./SidePanel";
@@ -39,7 +45,8 @@ export default function Graph({
     return m;
   }, [suggestions]);
 
-  const nodes: Node[] = useMemo(() => {
+  // Build initial nodes from graph
+  const initialNodes: Node[] = useMemo(() => {
     // Lay out nodes in non-overlapping rows grouped by hop.
     const H_GAP = 40; // horizontal gap between nodes
     const V_GAP = 200; // vertical gap between rows
@@ -92,6 +99,16 @@ export default function Graph({
     });
   }, [graph.nodes]);
 
+  // Keep nodes in state so dragging updates positions
+  const [nodes, setNodes] = useState<Node[]>(initialNodes);
+  useEffect(() => {
+    setNodes(initialNodes);
+  }, [initialNodes]);
+
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    setNodes((nds) => applyNodeChanges(changes, nds));
+  }, []);
+
   const edges: Edge[] = useMemo(() => {
     return graph.edges.map((e) => ({
       id: `${e.source}-${e.target}`,
@@ -117,6 +134,7 @@ export default function Graph({
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
         onNodeClick={(_, node) => setSelectedId(node.id)}
         fitView
       >
