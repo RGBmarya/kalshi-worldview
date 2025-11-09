@@ -1,13 +1,8 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import ReactFlow, {
-  Background,
-  Controls,
-  Edge,
-  Node,
-  Panel,
-} from "@xyflow/react";
+import { ReactFlow, Background, Controls, Panel } from "@xyflow/react";
+import type { Edge, Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { GraphResponse, Suggestion } from "../lib/types";
 import SidePanel from "./SidePanel";
