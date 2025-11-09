@@ -20,6 +20,7 @@ export default function Page() {
   const [suggestions, setSuggestions] =
     useState<GraphResponse["suggestions"]>([]);
   const [eventCounts, setEventCounts] = useState<Record<string, number>>({});
+  const [isExpanding, setIsExpanding] = useState(false);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -110,11 +111,129 @@ export default function Page() {
     [worldview]
   );
 
+  const handleExpand = useCallback(
+    async (nodeId: string, nodeLabel: string, nodeHop: number) => {
+      if (!graph) return;
+      
+      setIsExpanding(true);
+      setError(null);
+      
+      try {
+        const res = await fetch(`${API_BASE}/graph/expand`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify({
+            parentId: nodeId,
+            worldview: nodeLabel,
+            parentHop: nodeHop,
+            k: 200,
+            topN: 15,
+            threshold: 0.78,
+          }),
+        });
+        
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || "Expansion failed");
+        }
+        if (!res.body) throw new Error("No stream body");
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let completed = false;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let idx: number;
+          while ((idx = buffer.indexOf("\n\n")) >= 0) {
+            const raw = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+
+            let eventType = "message";
+            let dataLine = "";
+            for (const line of raw.split("\n")) {
+              if (line.startsWith("event: ")) eventType = line.slice(7).trim();
+              else if (line.startsWith("data: ")) dataLine += line.slice(6).trim();
+            }
+
+            if (!dataLine) continue;
+            try {
+              const payload = JSON.parse(dataLine);
+              if (eventType === "graph_complete") {
+                const expansion = payload as ClaimGraph;
+                const display = claimGraphToDisplayGraph(expansion);
+                
+                // Merge new nodes and edges into existing graph
+                setGraph((prevGraph) => {
+                  if (!prevGraph) return display;
+                  
+                  // Create a set of existing node IDs to avoid duplicates
+                  const existingNodeIds = new Set(prevGraph.nodes.map((n) => n.id));
+                  
+                  // Filter out nodes that already exist
+                  const newNodes = display.nodes.filter(
+                    (n) => !existingNodeIds.has(n.id)
+                  );
+                  
+                  // Create a set of existing edge IDs (source-target pairs)
+                  const existingEdges = new Set(
+                    prevGraph.edges.map((e) => `${e.source}-${e.target}`)
+                  );
+                  
+                  // Filter out edges that already exist
+                  const newEdges = display.edges.filter(
+                    (e) => !existingEdges.has(`${e.source}-${e.target}`)
+                  );
+                  
+                  return {
+                    ...prevGraph,
+                    nodes: [...prevGraph.nodes, ...newNodes],
+                    edges: [...prevGraph.edges, ...newEdges],
+                  };
+                });
+                
+                completed = true;
+                setIsExpanding(false);
+                try {
+                  await reader.cancel();
+                } catch {}
+                break;
+              } else if (eventType === "error") {
+                setError(payload?.error || "Expansion error");
+                setIsExpanding(false);
+              }
+            } catch {
+              // ignore partial JSON
+            }
+          }
+
+          if (completed) break;
+        }
+      } catch (err: any) {
+        setError(err?.message || "Expansion failed");
+        setIsExpanding(false);
+      }
+    },
+    [graph]
+  );
+
   return (
     <div className="min-h-screen w-full">
       {graph ? (
         <div className="h-screen w-full">
-          <Graph graph={graph} suggestions={suggestions} />
+          <Graph
+            graph={graph}
+            suggestions={suggestions}
+            onExpand={handleExpand}
+            isExpanding={isExpanding}
+          />
         </div>
       ) : (
         <div className="h-screen w-full flex items-center justify-center px-4">

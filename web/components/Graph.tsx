@@ -23,9 +23,13 @@ const hopColor = (hop: number) => {
 export default function Graph({
   graph,
   suggestions,
+  onExpand,
+  isExpanding,
 }: {
   graph: GraphResponse["graph"];
   suggestions: Suggestion[];
+  onExpand?: (nodeId: string, nodeLabel: string, nodeHop: number) => void;
+  isExpanding?: boolean;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -128,6 +132,14 @@ export default function Graph({
         node={selectedNode}
         suggestion={selectedSuggestion}
         onClose={() => setSelectedId(null)}
+        onExpand={
+          selectedNode && onExpand
+            ? () => {
+                onExpand(selectedNode.id, selectedNode.label, selectedNode.hop);
+              }
+            : undefined
+        }
+        isExpanding={isExpanding}
       />
     </div>
   );

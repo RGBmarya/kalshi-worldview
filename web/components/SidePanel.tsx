@@ -7,10 +7,14 @@ export default function SidePanel({
   node,
   suggestion,
   onClose,
+  onExpand,
+  isExpanding,
 }: {
   node?: GraphNode;
   suggestion?: Suggestion;
   onClose: () => void;
+  onExpand?: () => void;
+  isExpanding?: boolean;
 }) {
   if (!node) return null;
   const badge =
@@ -58,6 +62,20 @@ export default function SidePanel({
             {Math.round(suggestion.confidence * 100)}%)
           </div>
           <p className="mt-2 text-sm text-gray-700">{suggestion.rationale}</p>
+        </div>
+      )}
+      {onExpand && (
+        <div className="mt-6">
+          <button
+            onClick={onExpand}
+            disabled={isExpanding}
+            className="w-full inline-flex items-center justify-center rounded-md bg-black text-[#f7f3ea] px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isExpanding && (
+              <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            )}
+            {isExpanding ? "Expanding..." : "Expand"}
+          </button>
         </div>
       )}
     </div>
