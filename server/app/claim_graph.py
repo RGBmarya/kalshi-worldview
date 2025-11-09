@@ -257,7 +257,7 @@ class ClaimGraphBuilder:
             async with semaphore:
                 try:
                     # Search Kalshi
-                    candidates = await self.kalshi_client.search(node.label, limit=3)
+                    candidates = await self.kalshi_client.search(node.label, k=3)
                     
                     if not candidates:
                         return

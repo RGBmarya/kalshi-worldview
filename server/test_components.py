@@ -5,9 +5,13 @@ Test individual components of the pipeline without running the full server.
 import asyncio
 import os
 import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load environment variables from .env file in server directory
+_server_dir = Path(__file__).parent
+_env_path = _server_dir / ".env"
+load_dotenv(dotenv_path=_env_path)
 
 # Set up logging before importing app modules
 from app.logging_config import setup_logging

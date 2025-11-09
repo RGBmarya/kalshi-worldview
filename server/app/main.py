@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import List, Dict
 
 from dotenv import load_dotenv
@@ -21,8 +22,11 @@ from .claim_graph import ClaimGraphBuilder
 from .verification import VerificationAgent
 from .logging_config import setup_logging
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file in server directory
+# Get the server directory (parent of app directory)
+_server_dir = Path(__file__).parent.parent
+_env_path = _server_dir / ".env"
+load_dotenv(dotenv_path=_env_path)
 
 # Set up logging
 setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
