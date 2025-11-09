@@ -59,3 +59,50 @@ class Candidate(BaseModel):
     url: Optional[HttpUrl] = None
 
 
+# New claim-centric models
+class ExaSource(BaseModel):
+    title: str
+    url: str
+    snippet: str
+
+
+class VerificationResult(BaseModel):
+    confidence: confloat(ge=0.0, le=1.0)
+    rationale: str
+    exa_results: List[ExaSource]
+
+
+class KalshiMarket(BaseModel):
+    id: str
+    title: str
+    url: str
+    relevance: confloat(ge=0.0, le=1.0)
+
+
+class ClaimSource(BaseModel):
+    verification: Optional[VerificationResult] = None
+    kalshi_market: Optional[KalshiMarket] = None
+
+
+class ClaimNode(BaseModel):
+    id: str
+    label: str
+    status: Literal["generated", "verifying", "verified", "failed"]
+    sources: List[ClaimSource] = Field(default_factory=list)
+    similarity: confloat(ge=0.0, le=1.0)
+    hop: int
+
+
+class ClaimEdge(BaseModel):
+    source: str
+    target: str
+    type: Literal["derives_from", "similar_to"]
+    weight: confloat(ge=0.0, le=1.0)
+
+
+class ClaimGraph(BaseModel):
+    nodes: List[ClaimNode]
+    edges: List[ClaimEdge]
+    coreId: str
+
+

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from typing import List, Dict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .embeddings import EmbeddingClient
 from .derivatives import DerivativesClient
 from .kalshi_client import KalshiClient
 from .graph import build_graph
-from .models import GraphRequest, GraphResponse, Candidate, GraphNode, Suggestion
+from .models import GraphRequest, GraphResponse, Candidate, GraphNode, Suggestion, ClaimGraph
 from .suggest import SuggestionClient
+from .claim_graph import ClaimGraphBuilder
+from .verification import VerificationAgent
 
 
 app = FastAPI(title="Kalshi Event Graph")
@@ -114,6 +118,85 @@ async def graph_endpoint(body: GraphRequest):
         graph={"nodes": nodes, "edges": edges, "coreId": core_id},
         suggestions=suggestions,
         debug={"derivatives": derivatives},
+    )
+
+
+@app.post("/graph/stream")
+async def graph_stream(body: GraphRequest):
+    """
+    Streaming SSE endpoint that builds a claim graph incrementally.
+    
+    Events emitted:
+    - claim_generated: New claim added
+    - claim_verifying: Claim verification started
+    - claim_verified: Claim verification complete
+    - sources_found: Market sources attached
+    - graph_complete: Final graph ready
+    """
+    worldview = body.worldview.strip()
+    if not worldview:
+        raise HTTPException(status_code=400, detail="worldview is required")
+    
+    async def event_generator():
+        # Collect events to stream
+        events: List[tuple[str, dict]] = []
+        
+        async def emit(event_type: str, data: dict):
+            """Callback to collect SSE events."""
+            events.append((event_type, data))
+        
+        try:
+            # Instantiate clients
+            embedding_client = EmbeddingClient()
+            derivatives_client = DerivativesClient()
+            verification_agent = VerificationAgent()
+            kalshi_client = KalshiClient()
+            
+            # Build claim graph
+            builder = ClaimGraphBuilder(
+                emit_callback=emit,
+                derivatives_client=derivatives_client,
+                verification_agent=verification_agent,
+                kalshi_client=kalshi_client,
+                embedding_client=embedding_client,
+            )
+            
+            nodes, edges, core_id = await builder.build_from_worldview(
+                worldview=worldview,
+                k=body.k,
+                num_derivative_sets=4,
+                max_claims=body.topN,
+                threshold=body.threshold,
+            )
+            
+            # Stream all collected events
+            for event_type, data in events:
+                yield f"event: {event_type}\n"
+                yield f"data: {json.dumps(data)}\n\n"
+            
+            # Final event: complete graph
+            graph = ClaimGraph(
+                nodes=nodes,
+                edges=edges,
+                coreId=core_id,
+            )
+            
+            yield f"event: graph_complete\n"
+            yield f"data: {json.dumps(graph.model_dump(mode='json'))}\n\n"
+            
+        except Exception as e:
+            # Emit error event
+            yield f"event: error\n"
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
     )
 
 
