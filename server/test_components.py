@@ -14,7 +14,7 @@ from app.logging_config import setup_logging
 setup_logging(level="DEBUG")  # Use DEBUG to see everything
 
 
-async def test_derivatives():``
+async def test_derivatives():
     """Test self-consistent derivative generation."""
     print("=" * 70)
     print("1. Testing Derivative Generation (Self-Consistency)")

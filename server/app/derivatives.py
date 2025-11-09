@@ -19,7 +19,7 @@ Given ONE user belief, produce a diverse set of derivative beliefs that could be
 
 Cover multiple axes: technology milestones, regulation, macro, capital flows, consumer adoption, supply chain, geopolitics, competitive dynamics, and measurable milestones.
 
-Return 10–12 concise derivative beliefs.
+Return 3–5 concise derivative beliefs.
 
 Each belief must be:
 - Independent and falsifiable (has a measurable claim or milestone).
@@ -29,7 +29,7 @@ Each belief must be:
 
 Output as a JSON array of strings. No commentary.
 
-The thesis to explore is: \"{WORLDVIEW}\"
+The thesis to explore is: "{WORLDVIEW}"
 """
 
 
@@ -42,7 +42,7 @@ class DerivativesClient:
         self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
 
     def _validate_and_clean(self, items: List[str]) -> List[str]:
-        """Validate and clean derivatives (6-15 items, lenient)."""
+        """Validate and clean derivatives (3-5 items)."""
         logger.debug(f"Validating {len(items)} raw items")
         seen = set()
         results: List[str] = []
@@ -65,11 +65,11 @@ class DerivativesClient:
         
         logger.debug(f"Validation: {len(results)} valid, filtered: {filtered}")
         
-        if len(results) < 6:
-            raise ValueError(f"Too few derivative beliefs: got {len(results)}, need at least 6 after validation (filtered: {filtered})")
-        if len(results) > 15:
-            logger.debug(f"Truncating from {len(results)} to 15 items")
-            results = results[:15]
+        if len(results) < 3:
+            raise ValueError(f"Too few derivative beliefs: got {len(results)}, need at least 3 after validation (filtered: {filtered})")
+        if len(results) > 5:
+            logger.debug(f"Truncating from {len(results)} to 5 items")
+            results = results[:5]
         
         return results
 
@@ -80,7 +80,7 @@ class DerivativesClient:
         retry=retry_if_exception_type(Exception),
     )
     async def generate_single_set(self, worldview: str, temperature: float = 0.5) -> List[str]:
-        """Generate a single set of 6-15 derivative beliefs using structured outputs."""
+        """Generate 3-5 high-quality derivative beliefs using structured outputs."""
         logger.info(f"Generating derivatives (temp={temperature:.1f}) for: '{worldview[:60]}...'")
         
         prompt = DERIVATIVE_PROMPT.replace("{WORLDVIEW}", worldview.strip())

@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field
 class DerivativeBeliefs(BaseModel):
     """Response schema for derivative belief generation."""
     derivatives: List[str] = Field(
-        description="List of 10-12 derivative beliefs",
-        min_length=8,
-        max_length=15
+        description="List of 3-5 high-quality derivative beliefs",
+        min_length=3,
+        max_length=5
     )
 
 

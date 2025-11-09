@@ -14,6 +14,9 @@ from .models import (
     ClaimSource,
     KalshiMarket,
 )
+from .logging_config import get_logger
+
+logger = get_logger("claim_graph")
 
 
 class ClaimGraphBuilder:
@@ -22,11 +25,10 @@ class ClaimGraphBuilder:
     
     Pipeline:
     1. Create root claim from worldview
-    2. Generate 3-5 sets of derivative claims (6-15 per set, self-consistency)
+    2. Generate 3-5 high-quality derivative claims
     3. Verify each claim with Exa search
     4. Attach Kalshi markets as sources
-    5. Merge and dedupe by confidence
-    6. Build edges between claims
+    5. Build edges between claims
     """
     
     def __init__(
@@ -71,15 +73,8 @@ class ClaimGraphBuilder:
         # Step 1: Create root claim
         root_id = await self._add_root_claim(worldview)
         
-        # Step 2: Generate derivative claims (multiple sets for self-consistency)
-        derivative_sets = await self._generate_derivative_sets(
-            worldview, num_derivative_sets
-        )
-        
-        # Flatten all derivatives
-        all_derivatives = []
-        for derivative_set in derivative_sets:
-            all_derivatives.extend(derivative_set)
+        # Step 2: Generate 3-5 high-quality derivative claims
+        all_derivatives = await self._generate_derivatives(worldview)
         
         # Step 3: Create claim nodes (status: "generated")
         derivative_nodes = await self._create_derivative_nodes(
@@ -123,14 +118,11 @@ class ClaimGraphBuilder:
         
         return root_id
     
-    async def _generate_derivative_sets(
-        self, worldview: str, num_sets: int
-    ) -> List[List[str]]:
-        """Generate multiple sets of derivatives for self-consistency."""
-        derivative_sets = await self.derivatives_client.generate_multiple_sets(
-            worldview, num_sets=num_sets
-        )
-        return derivative_sets
+    async def _generate_derivatives(self, worldview: str) -> List[str]:
+        """Generate 3-5 high-quality derivatives in one shot."""
+        derivatives = await self.derivatives_client.generate_single_set(worldview, temperature=0.5)
+        logger.info(f"Generated {len(derivatives)} high-quality derivatives")
+        return derivatives
     
     async def _create_derivative_nodes(
         self, worldview: str, derivatives: List[str], root_id: str

@@ -5,6 +5,7 @@ import json
 import os
 from typing import List, Dict
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -18,7 +19,13 @@ from .models import GraphRequest, GraphResponse, Candidate, GraphNode, Suggestio
 from .suggest import SuggestionClient
 from .claim_graph import ClaimGraphBuilder
 from .verification import VerificationAgent
+from .logging_config import setup_logging
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Set up logging
+setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="Kalshi Event Graph")
 
