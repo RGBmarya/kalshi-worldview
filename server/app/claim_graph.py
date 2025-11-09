@@ -35,7 +35,7 @@ class ClaimGraphBuilder:
         self,
         emit_callback: Callable[[str, dict], Awaitable[None]],
         derivatives_client: DerivativesClient,
-        verification_agent: VerificationAgent,
+        verification_agent: VerificationAgent | None,
         kalshi_client: KalshiClient,
         embedding_client: EmbeddingClient,
     ):
@@ -97,6 +97,109 @@ class ClaimGraphBuilder:
         self.nodes = [self.node_map[root_id]] + merged_nodes
         
         return self.nodes, self.edges, root_id
+    
+    async def expand_from_node(
+        self,
+        parent_id: str,
+        parent_hop: int,
+        worldview: str,
+        k: int = 200,
+        num_derivative_sets: int = 4,
+        max_claims: int = 40,
+        threshold: float = 0.75,
+    ) -> Tuple[List[ClaimNode], List[ClaimEdge]]:
+        """
+        Expand the graph from an existing node.
+        
+        Args:
+            parent_id: ID of the parent node to expand from
+            parent_hop: Hop level of the parent node
+            worldview: The claim/worldview to expand from
+            k: Number of Kalshi results per claim search
+            num_derivative_sets: Number of derivative sets to generate (3-5)
+            max_claims: Maximum number of claims to keep after merging
+            threshold: Similarity threshold for edges
+            
+        Returns:
+            (new_nodes, new_edges) - nodes and edges to add to the graph
+        """
+        # Reset state for this expansion
+        self.nodes = []
+        self.edges = []
+        self.node_map = {}
+        
+        # Step 1: Generate derivatives from the worldview
+        all_derivatives = await self._generate_derivatives(worldview)
+        
+        # Step 2: Create derivative nodes with adjusted hop
+        derivative_nodes = await self._create_derivative_nodes_from_parent(
+            worldview, all_derivatives, parent_id, parent_hop
+        )
+        
+        # Step 3: Verify claims in parallel
+        await self._verify_claims_parallel(derivative_nodes, max_concurrent=8)
+        
+        # Step 4: Merge and dedupe by confidence, keep top N
+        merged_nodes = self._merge_and_dedupe(derivative_nodes, max_claims)
+        
+        # Step 5: Attach Kalshi markets as sources
+        await self._attach_market_sources(merged_nodes, k)
+        
+        # Step 6: Build edges between claims
+        await self._build_claim_edges(merged_nodes, threshold)
+        
+        return merged_nodes, self.edges
+    
+    async def _create_derivative_nodes_from_parent(
+        self, worldview: str, derivatives: List[str], parent_id: str, parent_hop: int
+    ) -> List[ClaimNode]:
+        """Create claim nodes from derivative strings, connected to parent."""
+        # Get worldview embedding
+        worldview_vec = await self.embedding_client.get_embedding(worldview)
+        
+        # Embed all derivatives in parallel
+        async def embed_claim(claim: str) -> Tuple[str, List[float]]:
+            vec = await self.embedding_client.get_embedding(claim)
+            return claim, vec
+        
+        tasks = [embed_claim(d) for d in derivatives]
+        embedded = await asyncio.gather(*tasks)
+        
+        # Create nodes
+        nodes: List[ClaimNode] = []
+        for claim, claim_vec in embedded:
+            node_id = f"claim-{uuid.uuid4().hex[:12]}"
+            
+            # Calculate similarity to parent worldview
+            similarity = EmbeddingClient.cosine_similarity(worldview_vec, claim_vec)
+            
+            node = ClaimNode(
+                id=node_id,
+                label=claim,
+                status="generated",
+                sources=[],
+                similarity=similarity,
+                hop=parent_hop + 1,  # Children are one hop further
+            )
+            
+            nodes.append(node)
+            self.node_map[node_id] = node
+            
+            # Emit event
+            await self.emit("claim_generated", {
+                "node": node.model_dump(mode="json"),
+            })
+            
+            # Add edge from parent to this claim
+            edge = ClaimEdge(
+                source=parent_id,
+                target=node_id,
+                type="derives_from",
+                weight=similarity,
+            )
+            self.edges.append(edge)
+        
+        return nodes
     
     async def _add_root_claim(self, worldview: str) -> str:
         """Create and emit the root claim node."""
@@ -191,8 +294,19 @@ class ClaimGraphBuilder:
                 })
                 
                 try:
-                    # Run verification
-                    verification = await self.verification_agent.verify_claim(node.label)
+                    # Set up verification agent with node-scoped emit callback for granular updates
+                    if self.verification_agent:
+                        async def emit_with_node(event_type: str, data: dict):
+                            data["nodeId"] = node.id
+                            await self.emit(event_type, data)
+                        # Run verification with node-specific emitter (no shared mutation)
+                        verification = await self.verification_agent.verify_claim(
+                            node.label,
+                            node_id=node.id,
+                            emit_callback=emit_with_node,
+                        )
+                    else:
+                        verification = None
                     
                     # Add verification as a source
                     source = ClaimSource(
@@ -208,7 +322,7 @@ class ClaimGraphBuilder:
                     # Emit verified event
                     await self.emit("claim_verified", {
                         "nodeId": node.id,
-                        "verification": verification.model_dump(mode="json"),
+                        "verification": verification.model_dump(mode="json") if verification else None,
                     })
                 except Exception as e:
                     node.status = "failed"
@@ -256,6 +370,11 @@ class ClaimGraphBuilder:
         async def search_markets(node: ClaimNode):
             async with semaphore:
                 try:
+                    # Emit market searching event
+                    await self.emit("market_searching", {
+                        "nodeId": node.id,
+                    })
+                    
                     # Search Kalshi
                     candidates = await self.kalshi_client.search(node.label, k=3)
                     

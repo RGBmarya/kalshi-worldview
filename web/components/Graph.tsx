@@ -7,11 +7,35 @@ import {
   Controls,
   Panel,
   applyNodeChanges,
+  Handle,
+  Position,
 } from "@xyflow/react";
 import type { Edge, Node, NodeChange } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { GraphResponse, Suggestion } from "../lib/types";
+import { GraphEdge, GraphResponse, Suggestion } from "../lib/types";
 import SidePanel from "./SidePanel";
+
+// Custom node component with trace info
+const TraceNode = ({ data, selected }: { data: any; selected?: boolean }) => {
+  return (
+    <div className="h-full w-full">
+      <Handle type="target" position={Position.Top} />
+      <div className="font-semibold text-sm mb-1 break-words">
+        {data.label}
+      </div>
+      {data.trace && (
+        <div className="text-xs opacity-80 border-t border-white/20 pt-1 mt-1 break-words">
+          {data.trace}
+        </div>
+      )}
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+};
+
+const nodeTypes = {
+  traceNode: TraceNode,
+};
 
 const hopColor = (hop: number) => {
   switch (hop) {
@@ -31,11 +55,15 @@ export default function Graph({
   suggestions,
   onExpand,
   isExpanding,
+  loadingNodes = [],
+  extraEdges = [],
 }: {
   graph: GraphResponse["graph"];
   suggestions: Suggestion[];
   onExpand?: (nodeId: string, nodeLabel: string, nodeHop: number) => void;
   isExpanding?: boolean;
+  loadingNodes?: GraphResponse["graph"]["nodes"];
+  extraEdges?: GraphEdge[];
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -44,6 +72,27 @@ export default function Graph({
     for (const s of suggestions) m.set(s.nodeId, s);
     return m;
   }, [suggestions]);
+
+  // Merge graph nodes with loading nodes (loading nodes take precedence if they exist)
+  const allNodes = useMemo(() => {
+    const nodeMap = new Map<string, GraphResponse["graph"]["nodes"][0]>();
+    // Add graph nodes first
+    for (const node of graph.nodes) {
+      nodeMap.set(node.id, node);
+    }
+    // Override with loading nodes (they have more up-to-date status)
+    for (const node of loadingNodes) {
+      nodeMap.set(node.id, node);
+    }
+    return Array.from(nodeMap.values());
+  }, [graph.nodes, loadingNodes]);
+
+  // Count loading nodes
+  const loadingCount = useMemo(() => {
+    return allNodes.filter(
+      (n) => n.status === "generated" || n.status === "verifying"
+    ).length;
+  }, [allNodes]);
 
   // Build initial nodes from graph
   const initialNodes: Node[] = useMemo(() => {
@@ -54,7 +103,7 @@ export default function Graph({
     const MARGIN_Y = 40;
 
     // Collect distinct hops in ascending order
-    const hops = Array.from(new Set(graph.nodes.map((n) => n.hop))).sort(
+    const hops = Array.from(new Set(allNodes.map((n) => n.hop))).sort(
       (a, b) => a - b
     );
 
@@ -66,7 +115,7 @@ export default function Graph({
 
     let currentY = MARGIN_Y;
     for (const hop of hops) {
-      const group = graph.nodes
+      const group = allNodes
         .filter((n) => n.hop === hop)
         .sort((a, b) => b.similarity - a.similarity);
 
@@ -80,24 +129,60 @@ export default function Graph({
       currentY += V_GAP;
     }
 
-    return graph.nodes.map((n) => {
+    return allNodes.map((n) => {
       const size = 20 + Math.round(20 * n.similarity);
       const pos = positions.get(n.id) ?? { x: 0, y: 0, width: size * 5 };
+      
+      // Determine if node is loading
+      const isLoading = n.status === "generated" || n.status === "verifying";
+      const isFailed = n.status === "failed";
+      
+      // Build trace info for tooltip/label
+      const traceParts: string[] = [];
+      if (n.status === "verifying" || n.loading?.verifying) {
+        traceParts.push("Verifying...");
+      } else if (n.trace?.verification?.confidence !== undefined) {
+        traceParts.push(`Verified (${Math.round(n.trace.verification.confidence * 100)}%)`);
+      }
+      if (n.loading?.searchingMarkets) {
+        traceParts.push("Searching markets...");
+      } else if (n.trace?.market) {
+        traceParts.push(`Market: ${n.trace.market.title}`);
+      }
+      
+      const traceText = traceParts.length > 0 ? traceParts.join(" • ") : undefined;
+      
+      const backgroundColor = isLoading 
+        ? "#9ca3af" // gray for loading
+        : isFailed
+        ? "#ef4444" // red for failed
+        : hopColor(n.hop);
+      
       return {
         id: n.id,
-        data: { label: n.label },
+        type: "traceNode",
+        data: { 
+          label: n.label,
+          trace: traceText,
+          status: n.status,
+          loading: n.loading,
+          backgroundColor,
+        },
         position: { x: pos.x, y: pos.y },
         style: {
-          backgroundColor: hopColor(n.hop),
+          backgroundColor,
           color: "white",
           borderRadius: 6,
-          border: "1px solid rgba(0,0,0,0.1)",
+          border: isLoading 
+            ? "2px dashed rgba(255,255,255,0.5)" 
+            : "1px solid rgba(0,0,0,0.1)",
           padding: 8,
           width: pos.width,
+          opacity: isLoading ? 0.6 : 1.0,
         },
       };
     });
-  }, [graph.nodes]);
+  }, [allNodes]);
 
   // Keep nodes in state so dragging updates positions
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
@@ -110,7 +195,8 @@ export default function Graph({
   }, []);
 
   const edges: Edge[] = useMemo(() => {
-    return graph.edges.map((e) => ({
+    const combined = [...graph.edges, ...extraEdges];
+    return combined.map((e) => ({
       id: `${e.source}-${e.target}`,
       source: e.source,
       target: e.target,
@@ -120,13 +206,13 @@ export default function Graph({
         opacity: Math.max(0.25, e.weight),
       },
     }));
-  }, [graph.edges]);
+  }, [graph.edges, extraEdges]);
 
   const selectedSuggestion = selectedId
     ? suggestionMap.get(selectedId)
     : undefined;
   const selectedNode = selectedId
-    ? graph.nodes.find((n) => n.id === selectedId)
+    ? allNodes.find((n) => n.id === selectedId)
     : undefined;
 
   return (
@@ -134,6 +220,7 @@ export default function Graph({
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={(_, node) => setSelectedId(node.id)}
         fitView
@@ -142,7 +229,12 @@ export default function Graph({
         <Controls />
         <Panel position="top-left">
           <div className="text-xs bg-white/80 backdrop-blur px-2 py-1 rounded">
-            Nodes: {graph.nodes.length} • Edges: {graph.edges.length}
+            Nodes: {allNodes.length} • Edges: {graph.edges.length}
+            {loadingCount > 0 && (
+              <span className="ml-2 text-gray-600">
+                • Loading: {loadingCount}
+              </span>
+            )}
           </div>
         </Panel>
       </ReactFlow>

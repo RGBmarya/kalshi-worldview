@@ -5,6 +5,30 @@ export type GraphNode = {
   type: "series" | "market";
   similarity: number;
   hop: number;
+  // Loading state and trace info
+  status?: "generated" | "verifying" | "verified" | "failed";
+  loading?: {
+    verifying?: boolean;
+    searchingMarkets?: boolean;
+  };
+  trace?: {
+    verification?: {
+      confidence?: number;
+      rationale?: string;
+      queries?: string[];
+      exaResults?: Array<{
+        title: string;
+        url: string;
+        snippet: string;
+      }>;
+    };
+    market?: {
+      id: string;
+      title: string;
+      url: string;
+      relevance: number;
+    };
+  };
 };
 
 export type GraphEdge = {
@@ -66,9 +90,31 @@ export function claimGraphToDisplayGraph(
       id: n.id,
       label: n.label,
       // default type for display; Graph component doesn't rely on it
-      type: "market",
+      type: "market" as const,
       similarity: n.similarity,
       hop: n.hop,
+      status: n.status,
+      trace: {
+        verification: n.sources[0]?.verification
+          ? {
+              confidence: n.sources[0].verification.confidence,
+              rationale: n.sources[0].verification.rationale,
+              exaResults: n.sources[0].verification.exa_results.map((r) => ({
+                title: r.title,
+                url: r.url,
+                snippet: r.snippet,
+              })),
+            }
+          : undefined,
+        market: n.sources[0]?.kalshi_market
+          ? {
+              id: n.sources[0].kalshi_market.id,
+              title: n.sources[0].kalshi_market.title,
+              url: n.sources[0].kalshi_market.url,
+              relevance: n.sources[0].kalshi_market.relevance,
+            }
+          : undefined,
+      },
     })),
     edges: cg.edges.map((e) => ({
       source: e.source,

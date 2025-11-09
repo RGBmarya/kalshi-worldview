@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   GraphResponse,
   ClaimGraph,
   claimGraphToDisplayGraph,
+  GraphEdge,
 } from "../lib/types";
 
 const Graph = dynamic(() => import("../components/Graph"), { ssr: false });
@@ -22,6 +23,12 @@ export default function Page() {
   );
   const [eventCounts, setEventCounts] = useState<Record<string, number>>({});
   const [isExpanding, setIsExpanding] = useState(false);
+  // Track loading nodes by ID
+  const [loadingNodes, setLoadingNodes] = useState<Map<string, GraphResponse["graph"]["nodes"][0]>>(new Map());
+  // Track ephemeral edges while streaming (e.g., root -> claim, parent -> child)
+  const [ephemeralEdges, setEphemeralEdges] = useState<GraphEdge[]>([]);
+  // Track current core/root id during initial build
+  const coreIdRef = useRef<string>("");
 
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -31,6 +38,9 @@ export default function Page() {
       setGraph(null);
       setSuggestions([]);
       setEventCounts({});
+      setLoadingNodes(new Map());
+      setEphemeralEdges([]);
+      coreIdRef.current = "";
       try {
         const res = await fetch(`${API_BASE}/graph/stream`, {
           method: "POST",
@@ -88,12 +98,185 @@ export default function Page() {
                 const cg = payload as ClaimGraph;
                 const display = claimGraphToDisplayGraph(cg);
                 setGraph(display);
+                // Clear ephemeral state once final graph is ready
+                setEphemeralEdges([]);
+                coreIdRef.current = cg.coreId || coreIdRef.current;
+                setLoadingNodes(new Map()); // Clear loading nodes
                 completed = true;
                 setLoading(false);
                 try {
                   await reader.cancel();
                 } catch {}
                 break;
+              } else if (eventType === "claim_generated") {
+                // Add new node to loading nodes
+                const node = payload.node as ClaimGraph["nodes"][0];
+                // Track core/root id for hop 0
+                if (node.hop === 0) {
+                  coreIdRef.current = node.id;
+                }
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const displayNode: GraphResponse["graph"]["nodes"][0] = {
+                    id: node.id,
+                    label: node.label,
+                    type: "market",
+                    similarity: node.similarity,
+                    hop: node.hop,
+                    status: node.status,
+                    trace: {},
+                  };
+                  next.set(node.id, displayNode);
+                  return next;
+                });
+                // Update graph if it exists, otherwise create initial graph
+                setGraph((prevGraph) => {
+                  if (!prevGraph) {
+                    return {
+                      nodes: [],
+                      edges: [],
+                      coreId: node.id,
+                    };
+                  }
+                  return prevGraph;
+                });
+                // Add ephemeral edge from core -> new derivative (hop 1) for visual feedback
+                if (node.hop === 1 && coreIdRef.current) {
+                  setEphemeralEdges((prev) => [
+                    ...prev,
+                    { source: coreIdRef.current, target: node.id, weight: 0.3 },
+                  ]);
+                }
+              } else if (eventType === "claim_verifying") {
+                // Update node status to verifying and set loading state
+                const nodeId = payload.nodeId as string;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    next.set(nodeId, {
+                      ...node,
+                      status: "verifying",
+                      loading: { ...node.loading, verifying: true },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "verification_query") {
+                // Add search query to verification trace progressively
+                const nodeId = payload.nodeId as string;
+                const query = payload.query as string;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    const existingQueries = node.trace?.verification?.queries || [];
+                    next.set(nodeId, {
+                      ...node,
+                      trace: {
+                        ...node.trace,
+                        verification: {
+                          ...node.trace?.verification,
+                          queries: [...existingQueries, query],
+                        },
+                      },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "verification_source_found") {
+                // Add individual source to verification trace progressively
+                const nodeId = payload.nodeId as string;
+                const source = payload.source;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    const existingResults = node.trace?.verification?.exaResults || [];
+                    next.set(nodeId, {
+                      ...node,
+                      trace: {
+                        ...node.trace,
+                        verification: {
+                          ...node.trace?.verification,
+                          exaResults: [...existingResults, source],
+                        },
+                      },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "claim_verified") {
+                // Update node with final verification trace and clear loading state
+                const nodeId = payload.nodeId as string;
+                const verification = payload.verification;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    // Merge final verification with existing sources and queries
+                    const existingResults = node.trace?.verification?.exaResults || [];
+                    const finalResults = verification?.exa_results || existingResults;
+                    const existingQueries = node.trace?.verification?.queries || [];
+                    next.set(nodeId, {
+                      ...node,
+                      status: verification ? "verified" : "failed",
+                      loading: { ...node.loading, verifying: false },
+                      trace: {
+                        ...node.trace,
+                        verification: verification
+                          ? {
+                              confidence: verification.confidence,
+                              rationale: verification.rationale,
+                              queries: existingQueries,
+                              exaResults: finalResults,
+                            }
+                          : undefined,
+                      },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "market_searching") {
+                // Set loading state for market search
+                const nodeId = payload.nodeId as string;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    next.set(nodeId, {
+                      ...node,
+                      loading: { ...node.loading, searchingMarkets: true },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "sources_found") {
+                // Update node with market trace and clear loading state
+                const nodeId = payload.nodeId as string;
+                const market = payload.market;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    next.set(nodeId, {
+                      ...node,
+                      loading: { ...node.loading, searchingMarkets: false },
+                      trace: {
+                        ...node.trace,
+                        market: market
+                          ? {
+                              id: market.id,
+                              title: market.title,
+                              url: market.url,
+                              relevance: market.relevance,
+                            }
+                          : undefined,
+                      },
+                    });
+                  }
+                  return next;
+                });
               } else if (eventType === "error") {
                 setError(payload?.error || "Stream error");
                 setLoading(false);
@@ -119,6 +302,8 @@ export default function Page() {
       
       setIsExpanding(true);
       setError(null);
+      setEphemeralEdges([]); // Reset ephemeral edges for this expansion
+      setLoadingNodes(new Map()); // Reset loading nodes for expansion
       
       try {
         const res = await fetch(`${API_BASE}/graph/expand`, {
@@ -201,12 +386,159 @@ export default function Page() {
                   };
                 });
                 
+                setEphemeralEdges([]); // Clear ephemeral edges once finalized
+                setLoadingNodes(new Map()); // Clear loading nodes
                 completed = true;
                 setIsExpanding(false);
                 try {
                   await reader.cancel();
                 } catch {}
                 break;
+              } else if (eventType === "claim_generated") {
+                // Add new node to loading nodes
+                const node = payload.node as ClaimGraph["nodes"][0];
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const displayNode: GraphResponse["graph"]["nodes"][0] = {
+                    id: node.id,
+                    label: node.label,
+                    type: "market",
+                    similarity: node.similarity,
+                    hop: node.hop,
+                    status: node.status,
+                    trace: {},
+                  };
+                  next.set(node.id, displayNode);
+                  return next;
+                });
+                // Add ephemeral edge from parent -> new child during expansion
+                setEphemeralEdges((prev) => [
+                  ...prev,
+                  { source: nodeId, target: node.id, weight: 0.3 },
+                ]);
+              } else if (eventType === "claim_verifying") {
+                const nodeId = payload.nodeId as string;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    next.set(nodeId, {
+                      ...node,
+                      status: "verifying",
+                      loading: { ...node.loading, verifying: true },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "verification_query") {
+                const nodeId = payload.nodeId as string;
+                const query = payload.query as string;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    const existingQueries = node.trace?.verification?.queries || [];
+                    next.set(nodeId, {
+                      ...node,
+                      trace: {
+                        ...node.trace,
+                        verification: {
+                          ...node.trace?.verification,
+                          queries: [...existingQueries, query],
+                        },
+                      },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "verification_source_found") {
+                const nodeId = payload.nodeId as string;
+                const source = payload.source;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    const existingResults = node.trace?.verification?.exaResults || [];
+                    next.set(nodeId, {
+                      ...node,
+                      trace: {
+                        ...node.trace,
+                        verification: {
+                          ...node.trace?.verification,
+                          exaResults: [...existingResults, source],
+                        },
+                      },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "claim_verified") {
+                const nodeId = payload.nodeId as string;
+                const verification = payload.verification;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    const existingResults = node.trace?.verification?.exaResults || [];
+                    const finalResults = verification?.exa_results || existingResults;
+                    const existingQueries = node.trace?.verification?.queries || [];
+                    next.set(nodeId, {
+                      ...node,
+                      status: verification ? "verified" : "failed",
+                      loading: { ...node.loading, verifying: false },
+                      trace: {
+                        ...node.trace,
+                        verification: verification
+                          ? {
+                              confidence: verification.confidence,
+                              rationale: verification.rationale,
+                              queries: existingQueries,
+                              exaResults: finalResults,
+                            }
+                          : undefined,
+                      },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "market_searching") {
+                const nodeId = payload.nodeId as string;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    next.set(nodeId, {
+                      ...node,
+                      loading: { ...node.loading, searchingMarkets: true },
+                    });
+                  }
+                  return next;
+                });
+              } else if (eventType === "sources_found") {
+                const nodeId = payload.nodeId as string;
+                const market = payload.market;
+                setLoadingNodes((prev) => {
+                  const next = new Map(prev);
+                  const node = next.get(nodeId);
+                  if (node) {
+                    next.set(nodeId, {
+                      ...node,
+                      loading: { ...node.loading, searchingMarkets: false },
+                      trace: {
+                        ...node.trace,
+                        market: market
+                          ? {
+                              id: market.id,
+                              title: market.title,
+                              url: market.url,
+                              relevance: market.relevance,
+                            }
+                          : undefined,
+                      },
+                    });
+                  }
+                  return next;
+                });
               } else if (eventType === "error") {
                 setError(payload?.error || "Expansion error");
                 setIsExpanding(false);
@@ -228,13 +560,15 @@ export default function Page() {
 
   return (
     <div className="min-h-screen w-full">
-      {graph ? (
+      {graph || loadingNodes.size > 0 ? (
         <div className="h-screen w-full">
           <Graph
-            graph={graph}
+            graph={graph || { nodes: [], edges: [], coreId: "" }}
             suggestions={suggestions}
             onExpand={handleExpand}
             isExpanding={isExpanding}
+            loadingNodes={Array.from(loadingNodes.values())}
+            extraEdges={ephemeralEdges}
           />
         </div>
       ) : (

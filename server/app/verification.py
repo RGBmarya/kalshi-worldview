@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import List
+from typing import List, Callable, Awaitable, Optional
 
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -42,6 +42,7 @@ class VerificationAgent:
         openai_api_key: str | None = None,
         exa_api_key: str | None = None,
         model: str | None = None,
+        emit_callback: Callable[[str, dict], Awaitable[None]] | None = None,
     ):
         oai_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         if not oai_key:
@@ -50,6 +51,7 @@ class VerificationAgent:
         self.client = AsyncOpenAI(api_key=oai_key)
         self.model = model or os.getenv("VERIFICATION_MODEL", "gpt-4o")
         self.exa_client = ExaClient(api_key=exa_api_key)
+        self.emit = emit_callback  # Optional callback for streaming events
         
     def _exa_search_tool_definition(self) -> dict:
         """Define the Exa search tool for OpenAI function calling."""
@@ -100,7 +102,12 @@ class VerificationAgent:
         wait=wait_exponential(multiplier=0.5, min=0.5, max=2),
         retry=retry_if_exception_type(Exception),
     )
-    async def verify_claim(self, claim: str) -> VerificationResult:
+    async def verify_claim(
+        self,
+        claim: str,
+        node_id: str | None = None,
+        emit_callback: Optional[Callable[[str, dict], Awaitable[None]]] = None,
+    ) -> VerificationResult:
         """
         Verify a claim using LLM with Exa search tool calling.
         
@@ -155,10 +162,25 @@ class VerificationAgent:
                         
                         logger.debug(f"Searching: '{query}'")
                         
+                        # Emit search query event before executing search
+                        if emit_callback and node_id:
+                            await emit_callback("verification_query", {
+                                "nodeId": node_id,
+                                "query": query,
+                            })
+                        
                         # Execute search and collect sources
                         search_results_text = self._execute_exa_search(query, num_results)
                         sources = self.exa_client.search_and_contents(query, num_results)
                         all_sources.extend(sources)
+                        
+                        # Emit granular events for each source found
+                        if emit_callback and node_id:
+                            for source in sources:
+                                await emit_callback("verification_source_found", {
+                                    "nodeId": node_id,
+                                    "source": source.model_dump(mode="json"),
+                                })
                         
                         # Add tool result to messages
                         messages.append({

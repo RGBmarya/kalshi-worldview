@@ -16,7 +16,7 @@ from .embeddings import EmbeddingClient
 from .derivatives import DerivativesClient
 from .kalshi_client import KalshiClient
 from .graph import build_graph
-from .models import GraphRequest, GraphResponse, Candidate, GraphNode, Suggestion, ClaimGraph
+from .models import GraphRequest, GraphResponse, Candidate, GraphNode, Suggestion, ClaimGraph, ExpandRequest
 from .suggest import SuggestionClient
 from .claim_graph import ClaimGraphBuilder
 from .verification import VerificationAgent
@@ -137,7 +137,7 @@ async def graph_stream(body: GraphRequest):
     """
     Streaming SSE endpoint that builds a claim graph incrementally.
     
-    Events emitted:
+    Events emitted (live as they occur):
     - claim_generated: New claim added
     - claim_verifying: Claim verification started
     - claim_verified: Claim verification complete
@@ -149,21 +149,21 @@ async def graph_stream(body: GraphRequest):
         raise HTTPException(status_code=400, detail="worldview is required")
     
     async def event_generator():
-        # Collect events to stream
-        events: List[tuple[str, dict]] = []
-        
+        # Stream events live using a queue
+        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+
         async def emit(event_type: str, data: dict):
-            """Callback to collect SSE events."""
-            events.append((event_type, data))
-        
+            """Callback to stream SSE events as they occur."""
+            await queue.put((event_type, data))
+
         try:
             # Instantiate clients
             embedding_client = EmbeddingClient()
             derivatives_client = DerivativesClient()
             verification_agent = VerificationAgent()
             kalshi_client = KalshiClient()
-            
-            # Build claim graph
+
+            # Build claim graph concurrently
             builder = ClaimGraphBuilder(
                 emit_callback=emit,
                 derivatives_client=derivatives_client,
@@ -171,32 +171,118 @@ async def graph_stream(body: GraphRequest):
                 kalshi_client=kalshi_client,
                 embedding_client=embedding_client,
             )
-            
-            nodes, edges, core_id = await builder.build_from_worldview(
-                worldview=worldview,
-                k=body.k,
-                num_derivative_sets=4,
-                max_claims=body.topN,
-                threshold=body.threshold,
+
+            build_task = asyncio.create_task(
+                builder.build_from_worldview(
+                    worldview=worldview,
+                    k=body.k,
+                    num_derivative_sets=4,
+                    max_claims=body.topN,
+                    threshold=body.threshold,
+                )
             )
-            
-            # Stream all collected events
-            for event_type, data in events:
-                yield f"event: {event_type}\n"
-                yield f"data: {json.dumps(data)}\n\n"
-            
+
+            # While building, stream events from the queue
+            while True:
+                if build_task.done() and queue.empty():
+                    break
+                try:
+                    event_type, data = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"event: {event_type}\n"
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    # No event yet; loop again
+                    continue
+
             # Final event: complete graph
-            graph = ClaimGraph(
-                nodes=nodes,
-                edges=edges,
-                coreId=core_id,
-            )
-            
+            nodes, edges, core_id = await build_task
+            graph = ClaimGraph(nodes=nodes, edges=edges, coreId=core_id)
             yield f"event: graph_complete\n"
             yield f"data: {json.dumps(graph.model_dump(mode='json'))}\n\n"
-            
+
         except Exception as e:
-            # Emit error event
+            yield f"event: error\n"
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
+@app.post("/graph/expand")
+async def graph_expand(body: ExpandRequest):
+    """
+    Expand the graph from an existing node.
+    Returns a subgraph with new nodes as children of the parent node.
+    """
+    worldview = body.worldview.strip()
+    if not worldview:
+        raise HTTPException(status_code=400, detail="worldview is required")
+    
+    async def event_generator():
+        # Stream events live using a queue
+        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue()
+
+        async def emit(event_type: str, data: dict):
+            """Callback to stream SSE events as they occur."""
+            await queue.put((event_type, data))
+
+        try:
+            # Instantiate clients
+            embedding_client = EmbeddingClient()
+            derivatives_client = DerivativesClient()
+            verification_agent = VerificationAgent()
+            kalshi_client = KalshiClient()
+
+            # Build claim graph expansion concurrently
+            builder = ClaimGraphBuilder(
+                emit_callback=emit,
+                derivatives_client=derivatives_client,
+                verification_agent=verification_agent,
+                kalshi_client=kalshi_client,
+                embedding_client=embedding_client,
+            )
+
+            expand_task = asyncio.create_task(
+                builder.expand_from_node(
+                    parent_id=body.parentId,
+                    parent_hop=body.parentHop,
+                    worldview=worldview,
+                    k=body.k,
+                    num_derivative_sets=4,
+                    max_claims=body.topN,
+                    threshold=body.threshold,
+                )
+            )
+
+            # While expanding, stream events from the queue
+            while True:
+                if expand_task.done() and queue.empty():
+                    break
+                try:
+                    event_type, data = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"event: {event_type}\n"
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    continue
+
+            # Final event: complete expansion
+            new_nodes, new_edges = await expand_task
+            expansion = ClaimGraph(
+                nodes=new_nodes,
+                edges=new_edges,
+                coreId=body.parentId,  # Use parent as core for this expansion
+            )
+            yield f"event: graph_complete\n"
+            yield f"data: {json.dumps(expansion.model_dump(mode='json'))}\n\n"
+
+        except Exception as e:
             yield f"event: error\n"
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
     

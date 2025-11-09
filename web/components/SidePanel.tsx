@@ -42,8 +42,129 @@ export default function SidePanel({
           Similarity:{" "}
           <span className="font-mono">{node.similarity.toFixed(3)}</span>
         </div>
+        {node.status && (
+          <div>
+            Status:{" "}
+            <span className="font-mono capitalize">
+              {node.status === "verifying" ? "Verifying..." : node.status}
+            </span>
+          </div>
+        )}
       </div>
-      {node.url && (
+      {node.trace && (
+        <div className="mt-3 border-t pt-3">
+          <h4 className="text-sm font-semibold mb-2">Trace Information</h4>
+          {(node.loading?.verifying || node.trace.verification) && (
+            <div className="mb-3">
+              <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-2">
+                Verification
+                {node.loading?.verifying && (
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                )}
+              </div>
+              {node.trace.verification?.queries && node.trace.verification.queries.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-xs font-semibold text-gray-600 mb-1">Search Queries:</div>
+                  <div className="space-y-1">
+                    {node.trace.verification.queries.map((query, idx) => (
+                      <div key={idx} className="text-xs text-gray-500 italic pl-2 border-l-2 border-gray-300">
+                        "{query}"
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {node.trace.verification?.confidence !== undefined ? (
+                <>
+                  <div className="text-xs text-gray-600 mb-1">
+                    Confidence: {Math.round(node.trace.verification.confidence * 100)}%
+                  </div>
+                  {node.trace.verification.rationale && (
+                    <div className="text-xs text-gray-600">
+                      {node.trace.verification.rationale}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-xs text-gray-500 italic">Verifying claim...</div>
+              )}
+              {node.trace.verification?.exaResults && node.trace.verification.exaResults.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-xs font-semibold text-gray-700 mb-1">
+                    Sources ({node.trace.verification.exaResults.length}):
+                  </div>
+                  <div className="space-y-1">
+                    {node.trace.verification.exaResults.slice(0, 3).map((result, idx) => (
+                      <div key={idx} className="text-xs text-gray-600">
+                        <a
+                          href={result.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-blue-600 hover:underline"
+                        >
+                          {result.title}
+                        </a>
+                        <div className="text-gray-500 mt-0.5">{result.snippet}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {(node.loading?.searchingMarkets || node.trace.market) && (
+            <div>
+              <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-2">
+                Kalshi Market
+                {node.loading?.searchingMarkets && (
+                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                )}
+              </div>
+              {node.trace.market ? (
+                <>
+                  <div className="text-xs text-gray-600 mb-1">
+                    {node.trace.market.title}
+                  </div>
+                  <a
+                    href={node.trace.market.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-blue-600 underline"
+                  >
+                    Open on Kalshi
+                  </a>
+                </>
+              ) : (
+                <div className="text-xs text-gray-500 italic">Searching for markets...</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {!node.trace && (node.loading?.verifying || node.loading?.searchingMarkets) && (
+        <div className="mt-3 border-t pt-3">
+          <h4 className="text-sm font-semibold mb-2">Trace Information</h4>
+          {node.loading?.verifying && (
+            <div className="mb-3">
+              <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-2">
+                Verification
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+              </div>
+              <div className="text-xs text-gray-500 italic">Verifying claim...</div>
+            </div>
+          )}
+          {node.loading?.searchingMarkets && (
+            <div>
+              <div className="text-xs font-semibold text-gray-700 mb-1 flex items-center gap-2">
+                Kalshi Market
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+              </div>
+              <div className="text-xs text-gray-500 italic">Searching for markets...</div>
+            </div>
+          )}
+        </div>
+      )}
+      {node.url && !node.trace?.market && (
         <div className="mt-3">
           <a
             href={node.url}

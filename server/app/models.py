@@ -45,6 +45,15 @@ class GraphRequest(BaseModel):
     topN: int = Field(15, ge=1, le=100)
 
 
+class ExpandRequest(BaseModel):
+    parentId: str
+    worldview: str = Field(..., min_length=4, max_length=2000)
+    k: int = Field(200, ge=1, le=1000)
+    threshold: float = Field(0.78, ge=0.0, le=1.0)
+    topN: int = Field(15, ge=1, le=100)
+    parentHop: int = Field(0, ge=0, le=10)
+
+
 class GraphResponse(BaseModel):
     graph: Graph
     suggestions: List[Suggestion]
